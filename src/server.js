@@ -16,25 +16,17 @@ connectDB();
 
 const app = express();
 
+/* Uploads folder path */
 const uploadsDirectory = path.resolve(process.cwd(), "uploads");
 
-/* Allowed Frontend URLs */
-const allowedOrigins = [
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-  "https://frontend-t74v.vercel.app"
-];
-
-/* CORS Configuration */
+/* CORS configuration */
 app.use(
   cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      } else {
-        return callback(new Error("CORS not allowed"));
-      }
-    },
+    origin: [
+      "http://localhost:5173",
+      "http://127.0.0.1:5173",
+      "https://frontend-t74v.vercel.app",
+    ],
     credentials: true,
   })
 );
@@ -43,7 +35,7 @@ app.use(
 app.use(express.json());
 app.use(cookieParser());
 
-/* Static Upload Folder */
+/* Static uploads */
 app.use("/uploads", express.static(uploadsDirectory));
 
 /* Routes */
@@ -53,8 +45,8 @@ app.use("/api/events", eventRoutes);
 app.use("/api/bookings", bookingRoutes);
 app.use("/api/payments", paymentRoutes);
 
-/* Server Port */
-const PORT = process.env.PORT || 5000;
+/* Server port */
+const PORT = process.env.PORT ;
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
