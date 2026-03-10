@@ -8,6 +8,7 @@ import Stripe from "stripe";
 
 const getStripe = () => new Stripe(process.env.STRIPE_SECRET_KEY);
 const stripTrailingSlash = (value) => String(value || "").replace(/\/+$/, "");
+const CHECKOUT_SESSION_ID_PATTERN = /^cs_(?:test|live)_[A-Za-z0-9]+$/;
 
 const getApiBaseUrl = (req) => {
   if (process.env.API_BASE_URL) {
@@ -28,6 +29,10 @@ const getClientBaseUrl = (req) => {
     return stripTrailingSlash(process.env.CLIENT_URL);
   }
 
+  if (process.env.FRONTEND_URL) {
+    return stripTrailingSlash(process.env.FRONTEND_URL);
+  }
+
   const requestOrigin = req?.headers?.origin;
 
   if (requestOrigin) {
@@ -37,18 +42,73 @@ const getClientBaseUrl = (req) => {
   return "http://localhost:5173";
 };
 
+const normalizeMoney = (value) => {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  return Number(parsed.toFixed(2));
+};
+
+const sanitizeStripeCheckoutUrl = (value) => {
+  if (typeof value !== "string" || !value.trim()) {
+    return "";
+  }
+
+  try {
+    const parsedUrl = new URL(value.trim());
+
+    if (parsedUrl.hostname !== "checkout.stripe.com") {
+      return "";
+    }
+
+    return parsedUrl.toString();
+  } catch {
+    return "";
+  }
+};
+
 // CREATE STRIPE SESSION
 export const createStripeSession = async (req, res) => {
   try {
     const stripe = getStripe();
     const { bookingId, amount } = req.body;
 
-    if (!bookingId || !amount) {
-      return res.status(400).json({ message: "bookingId and amount required" });
+    if (!bookingId) {
+      return res.status(400).json({ message: "bookingId required" });
     }
+
+    const booking = await Booking.findOne({ _id: bookingId, user: req.user }).populate(
+      "event",
+      "title"
+    );
+
+    if (!booking) {
+      return res.status(404).json({ message: "Booking not found" });
+    }
+
+    const bookingTotal = normalizeMoney(booking.totalPrice);
+
+    if (!bookingTotal) {
+      return res.status(400).json({ message: "Invalid booking amount" });
+    }
+
+    const requestedAmount = normalizeMoney(amount);
+
+    if (requestedAmount && Math.abs(requestedAmount - bookingTotal) > 0.01) {
+      return res.status(400).json({
+        message: "Amount mismatch for booking",
+      });
+    }
+
+    const payableAmount = requestedAmount || bookingTotal;
+    const unitAmount = Math.round(payableAmount * 100);
 
     const apiBaseUrl = stripTrailingSlash(getApiBaseUrl(req));
     const clientBaseUrl = stripTrailingSlash(getClientBaseUrl(req));
+    const cancelPath = booking?.event?._id ? `/payment/${booking.event._id}` : "/events";
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
@@ -57,20 +117,32 @@ export const createStripeSession = async (req, res) => {
         {
           price_data: {
             currency: "inr",
-            product_data: { name: "Event Ticket" },
-            unit_amount: Number(amount) * 100
+            product_data: {
+              name: booking?.event?.title ? `${booking.event.title} Ticket` : "Event Ticket",
+            },
+            unit_amount: unitAmount,
           },
-          quantity: 1
-        }
+          quantity: 1,
+        },
       ],
-      metadata: { bookingId },
+      metadata: {
+        bookingId: String(booking._id),
+        userId: String(req.user),
+      },
+      client_reference_id: String(booking._id),
       success_url: `${apiBaseUrl}/payments/verify?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${clientBaseUrl}/payment-cancel`
+      cancel_url: `${clientBaseUrl}${cancelPath}`,
     });
 
-    res.json({ url: session.url });
+    const safeCheckoutUrl = sanitizeStripeCheckoutUrl(session?.url);
+
+    return res.json({
+      sessionId: session.id,
+      id: session.id,
+      url: safeCheckoutUrl || undefined,
+    });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    return res.status(500).json({ message: err.message });
   }
 };
 
@@ -80,16 +152,27 @@ export const verifyStripePayment = async (req, res) => {
     const stripe = getStripe();
     const { session_id } = req.query;
 
+    if (typeof session_id !== "string" || !CHECKOUT_SESSION_ID_PATTERN.test(session_id)) {
+      return res.status(400).json({ message: "Invalid session id" });
+    }
+
     const session = await stripe.checkout.sessions.retrieve(session_id);
 
     if (session.payment_status !== "paid") {
       return res.status(400).json({ message: "Payment not completed" });
     }
 
-    const bookingId = session.metadata.bookingId;
+    const bookingId = session.metadata?.bookingId || session.client_reference_id;
+
+    if (!bookingId) {
+      return res.status(400).json({ message: "Booking id missing in Stripe session" });
+    }
+
     const booking = await Booking.findById(bookingId).populate("event");
 
-    if (!booking) return res.status(404).json({ message: "Booking not found" });
+    if (!booking) {
+      return res.status(404).json({ message: "Booking not found" });
+    }
 
     const clientBaseUrl = stripTrailingSlash(getClientBaseUrl(req));
 
@@ -103,7 +186,7 @@ export const verifyStripePayment = async (req, res) => {
       amount: booking.totalPrice,
       paymentMethod: "Card",
       paymentStatus: "Success",
-      transactionId: session.payment_intent
+      transactionId: session.payment_intent || session.id,
     });
 
     booking.paymentStatus = "Paid";
@@ -122,22 +205,24 @@ export const verifyStripePayment = async (req, res) => {
 
     const user = await User.findById(booking.user);
 
-    const attachments = booking.tickets.map((ticket, index) => ({
-      filename: `ticket-${index + 1}.png`,
-      path: ticket.qrCode
-    }));
+    if (user?.email) {
+      const attachments = booking.tickets.map((ticket, index) => ({
+        filename: `ticket-${index + 1}.png`,
+        path: ticket.qrCode,
+      }));
 
-    await sendEmail(
-      user.email,
-      "Event Ticket Confirmation",
-      `<h2>Payment successful</h2>
+      await sendEmail(
+        user.email,
+        "Event Ticket Confirmation",
+        `<h2>Payment successful</h2>
        <p>Your tickets are attached. Show QR at entry.</p>`,
-      attachments
-    );
+        attachments
+      );
+    }
 
     return res.redirect(`${clientBaseUrl}/success?bookingId=${bookingId}`);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    return res.status(500).json({ message: err.message });
   }
 };
 
@@ -154,9 +239,7 @@ export const getMyPayments = async (req, res) => {
 // ADMIN GET ALL PAYMENTS
 export const getAllPayments = async (req, res) => {
   try {
-    const payments = await Payment.find()
-      .populate("user")
-      .populate("booking");
+    const payments = await Payment.find().populate("user").populate("booking");
 
     res.json(payments);
   } catch (error) {
@@ -173,11 +256,13 @@ export const updatePaymentStatus = async (req, res) => {
       { new: true }
     );
 
-    if (!payment) return res.status(404).json({ message: "Payment not found" });
+    if (!payment) {
+      return res.status(404).json({ message: "Payment not found" });
+    }
 
-    res.json(payment);
+    return res.json(payment);
   } catch (error) {
-    res.status(500).json({ message: "Error updating payment" });
+    return res.status(500).json({ message: "Error updating payment" });
   }
 };
 
@@ -185,8 +270,8 @@ export const updatePaymentStatus = async (req, res) => {
 export const deletePayment = async (req, res) => {
   try {
     await Payment.findByIdAndDelete(req.params.id);
-    res.json({ message: "Payment deleted" });
+    return res.json({ message: "Payment deleted" });
   } catch (error) {
-    res.status(500).json({ message: "Error deleting payment" });
+    return res.status(500).json({ message: "Error deleting payment" });
   }
 };
