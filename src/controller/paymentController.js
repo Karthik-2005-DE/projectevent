@@ -136,10 +136,16 @@ export const createStripeSession = async (req, res) => {
 
     const safeCheckoutUrl = sanitizeStripeCheckoutUrl(session?.url);
 
+    if (!safeCheckoutUrl) {
+      return res.status(500).json({
+        message: "Stripe checkout URL missing or invalid",
+      });
+    }
+
     return res.json({
       sessionId: session.id,
       id: session.id,
-      url: safeCheckoutUrl || undefined,
+      url: safeCheckoutUrl,
     });
   } catch (err) {
     return res.status(500).json({ message: err.message });
@@ -275,3 +281,4 @@ export const deletePayment = async (req, res) => {
     return res.status(500).json({ message: "Error deleting payment" });
   }
 };
+
