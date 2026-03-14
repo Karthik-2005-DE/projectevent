@@ -34,7 +34,7 @@ const CHECKOUT_SESSION_PATTERN = /^cs_(?:test|live)_[A-Za-z0-9]+$/
 // CREATE STRIPE SESSION
 export const createStripeSession = async (req, res) => {
   try {
-
+    const stripe = getStripe()
     const { bookingId, amount } = req.body
 
     if (!bookingId) {
@@ -50,25 +50,16 @@ export const createStripeSession = async (req, res) => {
       return res.status(404).json({ message: "Booking not found" })
     }
 
-    const bookingTotal = normalizeMoney(booking.totalPrice)
-    const requestedAmount = normalizeMoney(amount)
+    const payableAmount = normalizeMoney(amount) || normalizeMoney(booking.totalPrice)
 
-    if (!bookingTotal) {
-      return res.status(400).json({ message: "Invalid booking amount" })
+    if (!payableAmount) {
+      return res.status(400).json({ message: "Invalid payment amount" })
     }
-
-    if (requestedAmount && Math.abs(requestedAmount - bookingTotal) > 0.01) {
-      return res.status(400).json({ message: "Amount mismatch" })
-    }
-
-    const payableAmount = requestedAmount || bookingTotal
-    const unitAmount = Math.round(payableAmount * 100)
 
     const clientBaseUrl = stripTrailingSlash(getClientBaseUrl(req))
-    const apiBaseUrl = stripTrailingSlash(getApiBaseUrl(req))
+    const unitAmount = Math.round(payableAmount * 100)
 
     const session = await stripe.checkout.sessions.create({
-
       payment_method_types: ["card"],
       mode: "payment",
 
@@ -89,9 +80,7 @@ export const createStripeSession = async (req, res) => {
         bookingId: booking._id.toString()
       },
 
-      client_reference_id: booking._id.toString(),
-
-      success_url: `${apiBaseUrl}/payments/verify?session_id={CHECKOUT_SESSION_ID}`,
+      success_url: `${clientBaseUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${clientBaseUrl}/events`
     })
 
