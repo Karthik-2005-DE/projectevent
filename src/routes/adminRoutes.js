@@ -1,27 +1,33 @@
 import express from "express"
-import {getAllUsers,
-    deleteUser,
-    restoreUser,
-    getAllEvents,
-    updateEvent,
-    deleteEvent,
-    getAllPayments,
-    updatePayment,
-    deletePayment
+
+import {
+  getAllUsers,
+  deleteUser,
+  restoreUser,
+  getAllEvents,
+  updateEvent,
+  deleteEvent,
+  getAllPayments,
+  updatePayment,
+  deletePayment
 } from "../controller/adminController.js"
-import { adminOnly } from "../middleware/adminMiddleware.js"
+
+import { protect, adminOnly } from "../middleware/adminMiddleware.js"
 
 const router = express.Router()
 
-router.get("/users",adminOnly,getAllUsers)
-router.put("/delete-user/:id",adminOnly,deleteUser)
-router.put("/restore-user/:id",adminOnly,restoreUser)
-router.get("/events", adminOnly, getAllEvents);
-router.put("/events/:id", adminOnly, updateEvent);
-router.delete("/events/:id", adminOnly, deleteEvent);
+router.get("/users", protect, adminOnly, getAllUsers)
 
-router.get("/payments", adminOnly, getAllPayments);
-router.put("/payments/:id", adminOnly, updatePayment);
-router.delete("/payments/:id", adminOnly, deletePayment);
+router.put("/delete-user/:id", protect, adminOnly, deleteUser)
+
+router.put("/restore-user/:id", protect, adminOnly, restoreUser)
+
+router.get("/events", protect, adminOnly, getAllEvents)
+router.put("/events/:id", protect, adminOnly, updateEvent)
+router.delete("/events/:id", protect, adminOnly, deleteEvent)
+
+router.get("/payments", protect, adminOnly, getAllPayments)
+router.put("/payments/:id", protect, adminOnly, updatePayment)
+router.delete("/payments/:id", protect, adminOnly, deletePayment)
 
 export default router

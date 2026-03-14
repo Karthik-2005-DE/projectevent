@@ -163,13 +163,16 @@ export const deleteEvent = async (req, res) => {
       });
     }
 
+    // Find bookings for the event
     const bookings = await Booking.find({ event: id });
 
     for (const booking of bookings) {
 
+      // update booking status
       booking.paymentStatus = "Refunded";
       await booking.save();
 
+      // find payment for booking
       const payment = await Payment.findOne({ booking: booking._id });
 
       if (payment) {
@@ -179,6 +182,7 @@ export const deleteEvent = async (req, res) => {
 
     }
 
+    // delete event
     await Event.findByIdAndDelete(id);
 
     res.status(200).json({
@@ -187,13 +191,16 @@ export const deleteEvent = async (req, res) => {
     });
 
   } catch (error) {
+
+    console.error("Delete Event Error:", error);   // IMPORTANT
+
     res.status(500).json({
       success: false,
-      message: "Failed to delete event"
+      message: error.message
     });
+
   }
 };
-
 
 /* =========================
    PAYMENTS
