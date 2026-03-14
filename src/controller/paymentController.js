@@ -20,10 +20,29 @@ const CHECKOUT_SESSION_PATTERN = /^cs_(?:test|live)_[A-Za-z0-9]+$/
 
 const stripTrailingSlash = (url) => String(url || "").replace(/\/+$/, "")
 
+const getOriginFromReferer = (referer) => {
+  try {
+    return referer ? new URL(referer).origin : ""
+  } catch {
+    return ""
+  }
+}
+
 const getClientBaseUrl = (req) => {
   if (process.env.CLIENT_URL) return stripTrailingSlash(process.env.CLIENT_URL)
   if (process.env.FRONTEND_URL) return stripTrailingSlash(process.env.FRONTEND_URL)
   return req.headers.origin || "http://localhost:5173"
+}
+
+const resolveClientBaseUrl = (req) => {
+  const requestedClientBaseUrl =
+    req.body?.clientBaseUrl || req.headers.origin || getOriginFromReferer(req.headers.referer)
+
+  if (requestedClientBaseUrl) {
+    return stripTrailingSlash(requestedClientBaseUrl)
+  }
+
+  return stripTrailingSlash(getClientBaseUrl(req))
 }
 
 const getServerBaseUrl = (req) => {
@@ -71,7 +90,7 @@ export const createStripeSession = async (req, res) => {
       return res.status(400).json({ message: "Invalid payment amount" })
     }
 
-    const clientBaseUrl = stripTrailingSlash(getClientBaseUrl(req))
+    const clientBaseUrl = resolveClientBaseUrl(req)
     const serverBaseUrl = stripTrailingSlash(getServerBaseUrl(req))
     const unitAmount = Math.round(payableAmount * 100)
 
@@ -93,6 +112,7 @@ export const createStripeSession = async (req, res) => {
       ],
       metadata: {
         bookingId: booking._id.toString(),
+        clientBaseUrl,
       },
       success_url: `${serverBaseUrl}/api/payments/verify?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${clientBaseUrl}/events`,
@@ -103,6 +123,7 @@ export const createStripeSession = async (req, res) => {
       url: session.url,
     })
   } catch (error) {
+    console.error("Stripe session creation failed:", error)
     res.status(500).json({ message: error.message })
   }
 }
@@ -133,7 +154,9 @@ export const verifyStripePayment = async (req, res) => {
       return res.status(404).json({ message: "Booking not found" })
     }
 
-    const clientBaseUrl = stripTrailingSlash(getClientBaseUrl(req))
+    const clientBaseUrl = stripTrailingSlash(
+      session.metadata?.clientBaseUrl || getClientBaseUrl(req)
+    )
 
     if (booking.paymentStatus === "Success") {
       return res.redirect(`${clientBaseUrl}/success?bookingId=${bookingId}`)
@@ -189,6 +212,7 @@ export const verifyStripePayment = async (req, res) => {
 
     res.redirect(`${clientBaseUrl}/success?bookingId=${bookingId}`)
   } catch (error) {
+    console.error("Stripe payment verification failed:", error)
     res.status(500).json({ message: error.message })
   }
 }
