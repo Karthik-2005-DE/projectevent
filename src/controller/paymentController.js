@@ -63,6 +63,76 @@ const normalizeMoney = (value) => {
   return Number(num.toFixed(2))
 }
 
+const ensurePaymentRecord = async (booking, session) => {
+  const existingPayment = await Payment.findOne({ booking: booking._id })
+
+  if (existingPayment) {
+    if (existingPayment.paymentStatus !== "Success") {
+      existingPayment.paymentStatus = "Success"
+      existingPayment.transactionId = session.payment_intent || session.id
+      await existingPayment.save()
+    }
+
+    return existingPayment
+  }
+
+  return Payment.create({
+    user: booking.user,
+    booking: booking._id,
+    amount: booking.totalPrice,
+    paymentMethod: "Card",
+    paymentStatus: "Success",
+    transactionId: session.payment_intent || session.id,
+  })
+}
+
+const fulfillBookingAsync = async (bookingId) => {
+  const booking = await Booking.findById(bookingId).populate("event")
+
+  if (!booking || booking.tickets?.length) {
+    return
+  }
+
+  const tickets = []
+
+  for (let i = 0; i < booking.quantity; i += 1) {
+    const ticketId = uuidv4()
+
+    const qrCode = await QRCode.toDataURL(
+      JSON.stringify({
+        ticketId,
+        eventId: booking.event._id,
+      })
+    )
+
+    tickets.push({ ticketId, qrCode })
+  }
+
+  booking.tickets = tickets
+  await booking.save()
+
+  const user = await User.findById(booking.user)
+
+  if (!user?.email) {
+    return
+  }
+
+  const attachments = tickets.map((ticket, index) => ({
+    filename: `ticket-${index + 1}.png`,
+    path: ticket.qrCode,
+  }))
+
+  await sendEmail(
+    user.email,
+    "Event Ticket Confirmation",
+    `
+    <h2>Payment Successful</h2>
+    <p>Your tickets are attached. Please show the QR code at entry.</p>
+    `,
+    attachments
+  )
+}
+
 // ----------------------
 // CREATE STRIPE SESSION
 // ----------------------
@@ -147,8 +217,7 @@ export const verifyStripePayment = async (req, res) => {
     }
 
     const bookingId = session.metadata?.bookingId || session.client_reference_id
-
-    const booking = await Booking.findById(bookingId).populate("event")
+    const booking = await Booking.findById(bookingId)
 
     if (!booking) {
       return res.status(404).json({ message: "Booking not found" })
@@ -158,59 +227,20 @@ export const verifyStripePayment = async (req, res) => {
       session.metadata?.clientBaseUrl || getClientBaseUrl(req)
     )
 
-    if (booking.paymentStatus === "Success") {
-      return res.redirect(`${clientBaseUrl}/success?bookingId=${bookingId}`)
-    }
+    await ensurePaymentRecord(booking, session)
 
-    await Payment.create({
-      user: booking.user,
-      booking: booking._id,
-      amount: booking.totalPrice,
-      paymentMethod: "Card",
-      paymentStatus: "Success",
-      transactionId: session.payment_intent || session.id,
-    })
-
-    booking.paymentStatus = "Success"
-
-    const tickets = []
-
-    for (let i = 0; i < booking.quantity; i++) {
-      const ticketId = uuidv4()
-
-      const qrCode = await QRCode.toDataURL(
-        JSON.stringify({
-          ticketId,
-          eventId: booking.event._id,
-        })
-      )
-
-      tickets.push({ ticketId, qrCode })
-    }
-
-    booking.tickets = tickets
-    await booking.save()
-
-    const user = await User.findById(booking.user)
-
-    if (user?.email) {
-      const attachments = tickets.map((ticket, index) => ({
-        filename: `ticket-${index + 1}.png`,
-        path: ticket.qrCode,
-      }))
-
-      await sendEmail(
-        user.email,
-        "Event Ticket Confirmation",
-        `
-        <h2>Payment Successful</h2>
-        <p>Your tickets are attached. Please show the QR code at entry.</p>
-        `,
-        attachments
-      )
+    if (booking.paymentStatus !== "Success") {
+      booking.paymentStatus = "Success"
+      await booking.save()
     }
 
     res.redirect(`${clientBaseUrl}/success?bookingId=${bookingId}`)
+
+    if (!booking.tickets?.length) {
+      void fulfillBookingAsync(bookingId).catch((error) => {
+        console.error("Booking fulfillment failed:", error)
+      })
+    }
   } catch (error) {
     console.error("Stripe payment verification failed:", error)
     res.status(500).json({ message: error.message })
