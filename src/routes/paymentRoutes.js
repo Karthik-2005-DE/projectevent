@@ -5,7 +5,8 @@ import {
   getMyPayments,
   getAllPayments,
   updatePaymentStatus,
-  deletePayment
+  deletePayment,
+  refundPayment
 } from "../controller/paymentController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
@@ -23,6 +24,7 @@ router.get("/my-payments", protect, getMyPayments);
 // â­ ADMIN
 router.get("/", protect, adminOnly, getAllPayments);
 router.put("/:id", protect, adminOnly, updatePaymentStatus);
+router.post("/refund/:id", protect, adminOnly, refundPayment)
 router.delete("/:id", protect, adminOnly, deletePayment);
 
 export default router;

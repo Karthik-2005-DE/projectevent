@@ -3,6 +3,7 @@
 import {
   getAdminStats,
   getAllUsers,
+  toggleUserBlock,
   deleteUser,
   restoreUser,
   getAllEvents,
@@ -25,7 +26,7 @@ const router = express.Router()
 router.get("/stats", protect, adminOnly, getAdminStats)
 
 router.get("/users", protect, adminOnly, getAllUsers)
-
+router.put("/block-user/:id", protect, adminOnly, toggleUserBlock)
 router.put("/delete-user/:id", protect, adminOnly, deleteUser)
 
 router.put("/restore-user/:id", protect, adminOnly, restoreUser)

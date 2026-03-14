@@ -46,6 +46,11 @@ export const login = async (req, res) => {
     if (!user) {
       return res.status(400).json({ message: "Invalid email or password" });
     }
+    if (user.isBlocked) {
+  return res.status(403).json({
+    message: "Your account has been blocked by admin"
+  })
+}
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {

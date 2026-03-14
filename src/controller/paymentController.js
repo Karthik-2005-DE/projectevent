@@ -286,7 +286,37 @@ export const updatePaymentStatus = async (req, res) => {
     return res.status(500).json({ message: "Error updating payment" });
   }
 };
+export const refundPayment = async (req, res) => {
+  try {
 
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
+
+    const payment = await Payment.findById(req.params.id)
+
+    if (!payment) {
+      return res.status(404).json({ message: "Payment not found" })
+    }
+
+    if (!payment.transactionId) {
+      return res.status(400).json({ message: "No Stripe transaction found" })
+    }
+
+    const refund = await stripe.refunds.create({
+      payment_intent: payment.transactionId
+    })
+
+    payment.paymentStatus = "Refunded"
+    await payment.save()
+
+    res.json({
+      message: "Payment refunded successfully",
+      refund
+    })
+
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+}
 // DELETE PAYMENT
 export const deletePayment = async (req, res) => {
   try {
