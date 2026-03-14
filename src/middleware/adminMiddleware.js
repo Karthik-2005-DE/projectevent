@@ -1,4 +1,4 @@
-import jwt from "jsonwebtoken";
+﻿import jwt from "jsonwebtoken";
 
 export const protect = (req, res, next) => {
 
@@ -15,6 +15,7 @@ export const protect = (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     req.user = decoded;
+    req.role = decoded.role;
 
     next();
 
@@ -23,8 +24,9 @@ export const protect = (req, res, next) => {
   }
 };
 export const adminOnly = (req, res, next) => {
+  const role = req.user?.role || req.role;
 
-  if (!req.user || req.user.role !== "admin") {
+  if (role !== "admin") {
     return res.status(403).json({
       success: false,
       message: "Access denied. Admin only."

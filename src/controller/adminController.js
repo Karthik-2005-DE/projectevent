@@ -1,7 +1,32 @@
-import Booking from "../models/Booking.js";
+﻿import Booking from "../models/Booking.js";
 import Event from "../models/Event.js";
 import Payment from "../models/Payment.js";
 import User from "../models/User.js";
+export const getAdminStats = async (req, res) => {
+  try {
+    const [events, bookings, payments, users] = await Promise.all([
+      Event.countDocuments(),
+      Booking.countDocuments(),
+      Payment.countDocuments(),
+      User.countDocuments({ isDeleted: { $ne: true } }),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      stats: {
+        events,
+        bookings,
+        payments,
+        users,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch dashboard stats"
+    });
+  }
+};
 
 /* =========================
    USERS

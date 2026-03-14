@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import {
   createStripeSession,
   verifyStripePayment,
@@ -13,16 +13,16 @@ import { adminOnly } from "../middleware/adminMiddleware.js";
 
 const router = express.Router();
 
-// ⭐ STRIPE
+// â­ STRIPE
 router.post("/stripe-session", protect, createStripeSession);
 router.get("/verify", verifyStripePayment);
 
-// ⭐ USER
+// â­ USER
 router.get("/my-payments", protect, getMyPayments);
 
-// ⭐ ADMIN
+// â­ ADMIN
 router.get("/", protect, adminOnly, getAllPayments);
-router.put("/:id", protect, updatePaymentStatus);
-router.delete("/:id", protect, deletePayment);
+router.put("/:id", protect, adminOnly, updatePaymentStatus);
+router.delete("/:id", protect, adminOnly, deletePayment);
 
 export default router;
