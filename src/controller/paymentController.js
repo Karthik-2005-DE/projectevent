@@ -158,7 +158,7 @@ export const verifyStripePayment = async (req, res) => {
     const stripe = getStripe();
     const { session_id } = req.query;
 
-    if (typeof session_id !== "string" || !CHECKOUT_SESSION_ID_PATTERN.test(session_id)) {
+    if (!session_id || !CHECKOUT_SESSION_ID_PATTERN.test(session_id)) {
       return res.status(400).json({ message: "Invalid session id" });
     }
 
@@ -171,7 +171,7 @@ export const verifyStripePayment = async (req, res) => {
     const bookingId = session.metadata?.bookingId || session.client_reference_id;
 
     if (!bookingId) {
-      return res.status(400).json({ message: "Booking id missing in Stripe session" });
+      return res.status(400).json({ message: "Booking id missing" });
     }
 
     const booking = await Booking.findById(bookingId).populate("event");
@@ -182,53 +182,68 @@ export const verifyStripePayment = async (req, res) => {
 
     const clientBaseUrl = stripTrailingSlash(getClientBaseUrl(req));
 
-    if (booking.paymentStatus === "Paid") {
+    // Prevent duplicate processing
+    if (booking.paymentStatus === "Success") {
       return res.redirect(`${clientBaseUrl}/success?bookingId=${bookingId}`);
     }
 
+    // Create payment record
     await Payment.create({
       user: booking.user,
       booking: bookingId,
       amount: booking.totalPrice,
       paymentMethod: "Card",
       paymentStatus: "Success",
-      transactionId: session.payment_intent || session.id,
+      transactionId: session.payment_intent || session.id
     });
 
-    booking.paymentStatus = "Paid";
+    // Update booking status
+    booking.paymentStatus = "Success";
 
+    // Generate tickets
     const tickets = [];
     for (let i = 0; i < booking.quantity; i++) {
       const ticketId = uuidv4();
+
       const qrImage = await QRCode.toDataURL(
-        JSON.stringify({ ticketId, eventId: booking.event._id })
+        JSON.stringify({
+          ticketId,
+          eventId: booking.event._id
+        })
       );
-      tickets.push({ ticketId, qrCode: qrImage });
+
+      tickets.push({
+        ticketId,
+        qrCode: qrImage
+      });
     }
 
     booking.tickets = tickets;
+
     await booking.save();
 
+    // Send email
     const user = await User.findById(booking.user);
 
     if (user?.email) {
       const attachments = booking.tickets.map((ticket, index) => ({
         filename: `ticket-${index + 1}.png`,
-        path: ticket.qrCode,
+        path: ticket.qrCode
       }));
 
       await sendEmail(
         user.email,
         "Event Ticket Confirmation",
         `<h2>Payment successful</h2>
-       <p>Your tickets are attached. Show QR at entry.</p>`,
+         <p>Your tickets are attached. Show QR at entry.</p>`,
         attachments
       );
     }
 
     return res.redirect(`${clientBaseUrl}/success?bookingId=${bookingId}`);
-  } catch (err) {
-    return res.status(500).json({ message: err.message });
+
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
   }
 };
 
