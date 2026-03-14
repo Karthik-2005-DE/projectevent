@@ -6,7 +6,18 @@ import QRCode from "qrcode"
 import { v4 as uuidv4 } from "uuid"
 import Stripe from "stripe"
 
+if (!process.env.STRIPE_SECRET_KEY) {
+  throw new Error("STRIPE_SECRET_KEY missing in environment variables")
+}
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
+
+const CHECKOUT_SESSION_PATTERN = /^cs_(?:test|live)_[A-Za-z0-9]+$/
+
+
+// ----------------------
+// HELPERS
+// ----------------------
 
 const stripTrailingSlash = (url) => String(url || "").replace(/\/+$/, "")
 
@@ -16,25 +27,20 @@ const getClientBaseUrl = (req) => {
   return req.headers.origin || "http://localhost:5173"
 }
 
-const getApiBaseUrl = (req) => {
-  if (process.env.API_BASE_URL) return stripTrailingSlash(process.env.API_BASE_URL)
-
-  const protocol = req.headers["x-forwarded-proto"] || req.protocol
-  return `${protocol}://${req.get("host")}/api`
-}
-
 const normalizeMoney = (value) => {
   const num = Number(value)
   if (!Number.isFinite(num) || num <= 0) return null
   return Number(num.toFixed(2))
 }
 
-const CHECKOUT_SESSION_PATTERN = /^cs_(?:test|live)_[A-Za-z0-9]+$/
 
+// ----------------------
 // CREATE STRIPE SESSION
+// ----------------------
+
 export const createStripeSession = async (req, res) => {
   try {
-    const stripe = getStripe()
+
     const { bookingId, amount } = req.body
 
     if (!bookingId) {
@@ -50,7 +56,8 @@ export const createStripeSession = async (req, res) => {
       return res.status(404).json({ message: "Booking not found" })
     }
 
-    const payableAmount = normalizeMoney(amount) || normalizeMoney(booking.totalPrice)
+    const payableAmount =
+      normalizeMoney(amount) || normalizeMoney(booking.totalPrice)
 
     if (!payableAmount) {
       return res.status(400).json({ message: "Invalid payment amount" })
@@ -84,18 +91,21 @@ export const createStripeSession = async (req, res) => {
       cancel_url: `${clientBaseUrl}/events`
     })
 
-    return res.json({
+    res.json({
       sessionId: session.id,
       url: session.url
     })
 
   } catch (error) {
-    return res.status(500).json({ message: error.message })
+    res.status(500).json({ message: error.message })
   }
 }
 
 
+// ----------------------
 // VERIFY STRIPE PAYMENT
+// ----------------------
+
 export const verifyStripePayment = async (req, res) => {
   try {
 
@@ -111,7 +121,8 @@ export const verifyStripePayment = async (req, res) => {
       return res.status(400).json({ message: "Payment not completed" })
     }
 
-    const bookingId = session.metadata?.bookingId || session.client_reference_id
+    const bookingId =
+      session.metadata?.bookingId || session.client_reference_id
 
     const booking = await Booking.findById(bookingId).populate("event")
 
@@ -121,12 +132,10 @@ export const verifyStripePayment = async (req, res) => {
 
     const clientBaseUrl = stripTrailingSlash(getClientBaseUrl(req))
 
-    // Prevent duplicate processing
     if (booking.paymentStatus === "Success") {
       return res.redirect(`${clientBaseUrl}/success?bookingId=${bookingId}`)
     }
 
-    // Save payment
     await Payment.create({
       user: booking.user,
       booking: booking._id,
@@ -138,29 +147,25 @@ export const verifyStripePayment = async (req, res) => {
 
     booking.paymentStatus = "Success"
 
-    // Generate QR tickets
     const tickets = []
 
     for (let i = 0; i < booking.quantity; i++) {
 
       const ticketId = uuidv4()
 
-      const qrCode = await QRCode.toDataURL(JSON.stringify({
-        ticketId,
-        eventId: booking.event._id
-      }))
+      const qrCode = await QRCode.toDataURL(
+        JSON.stringify({
+          ticketId,
+          eventId: booking.event._id
+        })
+      )
 
-      tickets.push({
-        ticketId,
-        qrCode
-      })
+      tickets.push({ ticketId, qrCode })
     }
 
     booking.tickets = tickets
-
     await booking.save()
 
-    // Send ticket email
     const user = await User.findById(booking.user)
 
     if (user?.email) {
@@ -173,21 +178,26 @@ export const verifyStripePayment = async (req, res) => {
       await sendEmail(
         user.email,
         "Event Ticket Confirmation",
-        `<h2>Payment Successful</h2>
-         <p>Your tickets are attached. Please show the QR code at entry.</p>`,
+        `
+        <h2>Payment Successful</h2>
+        <p>Your tickets are attached. Please show the QR code at entry.</p>
+        `,
         attachments
       )
     }
 
-    return res.redirect(`${clientBaseUrl}/success?bookingId=${bookingId}`)
+    res.redirect(`${clientBaseUrl}/success?bookingId=${bookingId}`)
 
   } catch (error) {
-    return res.status(500).json({ message: error.message })
+    res.status(500).json({ message: error.message })
   }
 }
 
 
-// GET USER PAYMENTS
+// ----------------------
+// USER PAYMENTS
+// ----------------------
+
 export const getMyPayments = async (req, res) => {
   try {
 
@@ -203,7 +213,10 @@ export const getMyPayments = async (req, res) => {
 }
 
 
-// ADMIN GET ALL PAYMENTS
+// ----------------------
+// ADMIN PAYMENTS
+// ----------------------
+
 export const getAllPayments = async (req, res) => {
   try {
 
@@ -219,7 +232,10 @@ export const getAllPayments = async (req, res) => {
 }
 
 
-// ADMIN UPDATE PAYMENT
+// ----------------------
+// UPDATE PAYMENT
+// ----------------------
+
 export const updatePaymentStatus = async (req, res) => {
   try {
 
@@ -241,7 +257,10 @@ export const updatePaymentStatus = async (req, res) => {
 }
 
 
-// ADMIN REFUND PAYMENT
+// ----------------------
+// REFUND PAYMENT
+// ----------------------
+
 export const refundPayment = async (req, res) => {
   try {
 
@@ -256,7 +275,6 @@ export const refundPayment = async (req, res) => {
     })
 
     payment.paymentStatus = "Refunded"
-
     await payment.save()
 
     res.json({
@@ -270,7 +288,10 @@ export const refundPayment = async (req, res) => {
 }
 
 
+// ----------------------
 // DELETE PAYMENT
+// ----------------------
+
 export const deletePayment = async (req, res) => {
   try {
 
